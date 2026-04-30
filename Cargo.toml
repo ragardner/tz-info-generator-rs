@@ -1,0 +1,7 @@
+[package]
+name = "tz-info-generator-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parse-zoneinfo = "0.5"
