@@ -258,7 +258,9 @@ fn main() {
     }
     output.push_str("];\n\n");
 
-    // Transition struct
+    // Transition struct - NOTE: we deliberately do NOT add a `timestamp` field here.
+    // UTC transition times are *derived* on-the-fly (see transition_utc helper below).
+    // This keeps binary size minimal while still enabling efficient UTC lookups.
     output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     output.push_str(
         "pub struct Transition { pub local_timestamp: i64, pub offset: i32, pub abbrev_idx: u16 }\n\n",
@@ -473,6 +475,137 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
         is_gap: false,
         gap_size: 0,
     })
+}
+
+// =============================================================================
+// UTC-based lookup (NEW)
+// =============================================================================
+
+/// Computes the UTC Unix time at which the transition at `idx` takes effect.
+/// 
+/// This is derived without storing an extra field in `Transition`:
+///   - idx == 0 → i64::MIN (covers from the beginning of time)
+///   - idx >= 1 → local_timestamp[idx] - offset[idx-1]
+/// 
+/// Why this works: The stored `local_timestamp` for a transition entry is
+/// exactly (UTC transition instant + pre-transition offset). Subtracting the
+/// previous entry's post-transition offset recovers the pure UTC instant.
+/// This is O(1) and keeps the static data size unchanged.
+#[inline(always)]
+fn transition_utc(transitions: &[Transition], idx: usize) -> i64 {
+    if idx == 0 {
+        i64::MIN
+    } else {
+        transitions[idx].local_timestamp - transitions[idx - 1].offset as i64
+    }
+}
+
+/// Binary search (O(log n)) to find the index of the last transition whose
+/// UTC time <= `utc_unix`. Uses the derived UTC times via `transition_utc`.
+#[inline(always)]
+fn find_transition_for_utc(transitions: &[Transition], utc_unix: i64) -> usize {
+    let mut lo = 0usize;
+    let mut hi = transitions.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if transition_utc(transitions, mid) <= utc_unix {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    // `lo` is now the insertion point (first index where transition_utc > utc_unix).
+    // The last valid transition is therefore `lo - 1` (or 0 if before the first).
+    if lo == 0 { 0 } else { lo - 1 }
+}
+
+fn resolve_far_future_utc(
+    transitions: &[Transition],
+    repeating_tail_start: Option<usize>,
+    utc_unix: i64,
+) -> Option<OffsetInfo> {
+    if let Some(start) = repeating_tail_start {
+        let cycle = &transitions[start..];
+        if cycle.len() < 2 {
+            return last_transition(transitions);
+        }
+        let first_t = transition_utc(transitions, start);
+        let last_t = transition_utc(transitions, start + cycle.len() - 1);
+        let period = last_t - first_t;
+        if period <= 0 {
+            return last_transition(transitions);
+        }
+        let elapsed = utc_unix - first_t;
+        if elapsed < 0 {
+            return last_transition(transitions);
+        }
+        let position_in_cycle = elapsed % period;
+
+        // Binary search (O(log n)) for the last transition in the cycle whose
+        // relative UTC time <= position_in_cycle.
+        let mut lo = 0usize;
+        let mut hi = cycle.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let t_mid = transition_utc(transitions, start + mid);
+            if (t_mid - first_t) <= position_in_cycle {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let best_j = if lo == 0 { 0 } else { lo - 1 };
+
+        let t = &cycle[best_j];
+        Some(OffsetInfo {
+            offset: t.offset,
+            abbrev: abbrev(t.abbrev_idx),
+            is_gap: false,
+            gap_size: 0,
+        })
+    } else {
+        last_transition(transitions)
+    }
+}
+
+/// Returns detailed offset information for the given IANA timezone
+/// at the specified **UTC** Unix timestamp.
+///
+/// `is_gap` is **always false** and `gap_size` is always 0 because
+/// gaps/overlaps are local-time phenomena only. Every UTC instant has
+/// exactly one well-defined offset.
+pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
+    let (_, transitions, repeating_tail_start) = get_tz_data(name)?;
+    if transitions.is_empty() {
+        return None;
+    }
+
+    let idx = find_transition_for_utc(transitions, utc_unix);
+
+    // If we're past the last *stored* transition and this zone has a repeating tail,
+    // delegate to the far-future resolver (which correctly handles perpetual DST rules).
+    let last_idx = transitions.len() - 1;
+    let last_t_utc = transition_utc(transitions, last_idx);
+    if utc_unix > last_t_utc {
+        if repeating_tail_start.is_some() {
+            return resolve_far_future_utc(transitions, repeating_tail_start, utc_unix);
+        }
+    }
+
+    let t = &transitions[idx];
+    Some(OffsetInfo {
+        offset: t.offset,
+        abbrev: abbrev(t.abbrev_idx),
+        is_gap: false,
+        gap_size: 0,
+    })
+}
+
+/// Convenience wrapper that returns just the offset (in seconds) for a UTC instant.
+/// Most callers who only need the numeric offset will use this.
+#[inline(always)]
+pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
+    offset_info_at_utc(name, utc_unix).map(|info| info.offset)
 }
 "#,
     );
