@@ -1,3 +1,8 @@
+//! Place the tz data folder in your project root
+//! then in a terminal do: cargo run -- <your tz data folder name>
+//! for example:
+//! cargo run -- tzdata2026a
+
 use parse_zoneinfo::{
     line::{Line, Year},
     table::{Saving, TableBuilder},
@@ -6,13 +11,6 @@ use parse_zoneinfo::{
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-
-/*
-Place the tz data folder in your project root
-then in a terminal do: cargo run -- <your tz data folder name>
-for example:
-cargo run -- tzdata2026a
-*/
 
 mod tzdb;
 
@@ -240,7 +238,7 @@ fn main() {
 
     output.push_str(
         "//! This module is auto-generated from the IANA Time Zone Database\n\
-        //! found at: https://www.iana.org/time-zones
+        //! found at: https://www.iana.org/time-zones\n\
         //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
         //! mode (`tz` feature) which has full historical transitions.\n\n",
     );
