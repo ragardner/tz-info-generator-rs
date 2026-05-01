@@ -231,19 +231,10 @@ fn main() {
     output.push_str("#![allow(clippy::too_many_lines)]\n");
     output.push_str("#![cfg_attr(rustfmt, rustfmt::skip)]\n\n");
 
-    // === Feature documentation ===
     output.push_str(
-        "// This file is auto-generated.\n\
-         //\n\
-         // The `tz` feature controls whether the full IANA timezone database is included:\n\
-         //   - `features = [\"tz\"]` (default for most users): Full support (~600 zones,\n\
-         //     hundreds of unique transition tables). Binary size impact: several hundred KB to low MB.\n\
-         //   - Without the feature: Only UTC + zones with *identical* transition data to UTC\n\
-         //     are supported (typically 5-15 entries). This keeps the binary as small as possible\n\
-         //     for applications that only need basic UTC/offset handling.\n\
-         //\n\
-         // Both modes expose the same public API (`offset_at`, `offset_info_at`, etc.).\n\
-         // `TZ_ENTRIES` is conditionally compiled — the compiler picks the right version.\n\n",
+        "//! This module is auto-generated from the IANA Time Zone Database.\n\
+         //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
+         //! mode (`tz` feature) which has full historical transitions.\n\n",
     );
 
     output.push_str(&format!("pub static VERSION: &str = \"{}\";\n\n", version));
@@ -258,16 +249,19 @@ fn main() {
     }
     output.push_str("];\n\n");
 
-    // Transition struct - NOTE: we deliberately do NOT add a `timestamp` field here.
-    // UTC transition times are *derived* on-the-fly (see transition_utc helper below).
-    // This keeps binary size minimal while still enabling efficient UTC lookups.
     output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     output.push_str(
-        "pub struct Transition { pub local_timestamp: i64, pub offset: i32, pub abbrev_idx: u16 }\n\n",
+        "pub struct Transition {\n    pub local_timestamp: i64,\n    pub offset: i32,\n    pub abbrev_idx: u16,\n}\n\n",
     );
 
-    // === get_tz_data (already present - keep this) ===
-    output.push_str("pub fn get_tz_data(name: &str) -> Option<(&str, &'static [Transition], Option<usize>)> {\n");
+    output.push_str(
+        "/// Returns the transition data for the given IANA timezone name.\n\
+         ///\n\
+         /// Returns `Some((name, transitions, repeating_tail_start))` or `None` if unknown.\n\
+         /// `repeating_tail_start` indicates the index from which the transition pattern repeats\n\
+         /// indefinitely (for zones with perpetual DST rules).\n\
+         pub fn get_tz_data(name: &str) -> Option<(&str, &'static [Transition], Option<usize>)> {\n",
+    );
     output.push_str("    let idx = TZ_ENTRIES.partition_point(|(n, _, _)| *n < name);\n");
     output.push_str("    if idx < TZ_ENTRIES.len() && TZ_ENTRIES[idx].0 == name {\n");
     output.push_str("        Some(TZ_ENTRIES[idx])\n");
@@ -278,12 +272,17 @@ fn main() {
         r#"
 #[derive(Debug, Clone, Copy)]
 pub struct OffsetInfo {
+    /// The offset from UTC in seconds (positive = east of UTC).
     pub offset: i32,
+    /// Time zone abbreviation in effect (e.g. "EDT", "GMT").
     pub abbrev: &'static str,
+    /// Whether the requested local time falls in a gap (spring-forward).
     pub is_gap: bool,
+    /// Size of the gap in seconds (only meaningful when `is_gap == true`).
     pub gap_size: i64,
 }
 
+/// Returns the abbreviation string for the given index into `ABBREVS`.
 #[inline(always)]
 pub fn abbrev(idx: u16) -> &'static str {
     ABBREVS[idx as usize]
@@ -315,6 +314,9 @@ fn resolve_far_future_local(
         if period <= 0 {
             return last_transition(transitions);
         }
+        if first.local_timestamp == i64::MIN {
+            return last_transition(transitions);
+        }
         let elapsed = local_unix - first.local_timestamp;
         if elapsed < 0 {
             return last_transition(transitions);
@@ -338,7 +340,6 @@ fn resolve_far_future_local(
 
         let prev = &cycle[idx - 1];
 
-        // detect gap immediately after a spring-forward that starts this segment
         if idx >= 2 {
             let pprev = &cycle[idx - 2];
             let off_diff = (prev.offset - pprev.offset) as i64;
@@ -349,7 +350,7 @@ fn resolve_far_future_local(
                 let query_local = first.local_timestamp + position_in_cycle;
                 if query_local >= window_start && query_local < window_end {
                     return Some(OffsetInfo {
-                        offset: prev.offset,           // post-jump offset
+                        offset: prev.offset,
                         abbrev: abbrev(prev.abbrev_idx),
                         is_gap: true,
                         gap_size: off_diff,
@@ -369,7 +370,7 @@ fn resolve_far_future_local(
                 if query_local >= window_start && query_local < window_end {
                     if off_diff > 0 {
                         return Some(OffsetInfo {
-                            offset: nxt.offset,        // post-jump offset
+                            offset: nxt.offset,
                             abbrev: abbrev(nxt.abbrev_idx),
                             is_gap: true,
                             gap_size: off_diff,
@@ -398,12 +399,11 @@ fn resolve_far_future_local(
     }
 }
 
-/// Returns detailed offset information for the given IANA timezone
-/// at the specified **local** Unix timestamp.
+/// Returns offset information for an IANA timezone at the given **local** Unix time.
 ///
-/// When `is_gap` is true, the requested local time does not exist
-/// (spring-forward gap). Use `gap_size` to correctly shift the time forward
-/// (add gap_size to the provisional local unix, then subtract the returned offset).
+/// If the local time falls in a gap (spring-forward), `is_gap` is `true` and
+/// `gap_size` contains the number of skipped seconds. Add `gap_size` to the
+/// original local time and re-query to obtain a valid instant.
 pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
     let (_, transitions, repeating_tail_start) = get_tz_data(name)?;
     let idx = transitions.partition_point(|t| t.local_timestamp <= local_unix);
@@ -422,7 +422,6 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
 
     let prev = &transitions[idx - 1];
 
-    // detect gap right after a spring-forward transition that starts this segment
     if idx >= 2 {
         let pprev = &transitions[idx - 2];
         let off_diff = (prev.offset - pprev.offset) as i64;
@@ -432,7 +431,7 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
             let window_end = window_start + window_size;
             if local_unix >= window_start && local_unix < window_end {
                 return Some(OffsetInfo {
-                    offset: prev.offset,           // post-jump offset (EDT etc.)
+                    offset: prev.offset,
                     abbrev: abbrev(prev.abbrev_idx),
                     is_gap: true,
                     gap_size: off_diff,
@@ -441,7 +440,6 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
         }
     }
 
-    // prev ↔ nxt check (for overlaps and any remaining cases)
     if idx < transitions.len() {
         let nxt = &transitions[idx];
         let off_diff = (nxt.offset - prev.offset) as i64;
@@ -452,7 +450,7 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
             if local_unix >= window_start && local_unix < window_end {
                 if off_diff > 0 {
                     return Some(OffsetInfo {
-                        offset: nxt.offset,        // post-jump offset
+                        offset: nxt.offset,
                         abbrev: abbrev(nxt.abbrev_idx),
                         is_gap: true,
                         gap_size: off_diff,
@@ -477,20 +475,10 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
     })
 }
 
-// =============================================================================
-// UTC-based lookup (NEW)
-// =============================================================================
-
-/// Computes the UTC Unix time at which the transition at `idx` takes effect.
-/// 
-/// This is derived without storing an extra field in `Transition`:
-///   - idx == 0 → i64::MIN (covers from the beginning of time)
-///   - idx >= 1 → local_timestamp[idx] - offset[idx-1]
-/// 
-/// Why this works: The stored `local_timestamp` for a transition entry is
-/// exactly (UTC transition instant + pre-transition offset). Subtracting the
-/// previous entry's post-transition offset recovers the pure UTC instant.
-/// This is O(1) and keeps the static data size unchanged.
+/// Computes the UTC instant at which the transition at `idx` occurs.
+///
+/// For `idx == 0` this returns `i64::MIN`. For `idx >= 1` it is derived as
+/// `local_timestamp[idx] - offset[idx-1]`.
 #[inline(always)]
 fn transition_utc(transitions: &[Transition], idx: usize) -> i64 {
     if idx == 0 {
@@ -500,8 +488,7 @@ fn transition_utc(transitions: &[Transition], idx: usize) -> i64 {
     }
 }
 
-/// Binary search (O(log n)) to find the index of the last transition whose
-/// UTC time <= `utc_unix`. Uses the derived UTC times via `transition_utc`.
+/// Binary search for the last transition whose UTC time is ≤ `utc_unix`.
 #[inline(always)]
 fn find_transition_for_utc(transitions: &[Transition], utc_unix: i64) -> usize {
     let mut lo = 0usize;
@@ -514,8 +501,6 @@ fn find_transition_for_utc(transitions: &[Transition], utc_unix: i64) -> usize {
             hi = mid;
         }
     }
-    // `lo` is now the insertion point (first index where transition_utc > utc_unix).
-    // The last valid transition is therefore `lo - 1` (or 0 if before the first).
     if lo == 0 { 0 } else { lo - 1 }
 }
 
@@ -535,14 +520,15 @@ fn resolve_far_future_utc(
         if period <= 0 {
             return last_transition(transitions);
         }
+        if first_t == i64::MIN {
+            return last_transition(transitions);
+        }
         let elapsed = utc_unix - first_t;
         if elapsed < 0 {
             return last_transition(transitions);
         }
         let position_in_cycle = elapsed % period;
 
-        // Binary search (O(log n)) for the last transition in the cycle whose
-        // relative UTC time <= position_in_cycle.
         let mut lo = 0usize;
         let mut hi = cycle.len();
         while lo < hi {
@@ -568,12 +554,10 @@ fn resolve_far_future_utc(
     }
 }
 
-/// Returns detailed offset information for the given IANA timezone
-/// at the specified **UTC** Unix timestamp.
+/// Returns offset information for an IANA timezone at the given **UTC** Unix time.
 ///
-/// `is_gap` is **always false** and `gap_size` is always 0 because
-/// gaps/overlaps are local-time phenomena only. Every UTC instant has
-/// exactly one well-defined offset.
+/// `is_gap` is always `false` because gaps are a local-time concept only.
+/// Every UTC instant has exactly one well-defined offset.
 pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
     let (_, transitions, repeating_tail_start) = get_tz_data(name)?;
     if transitions.is_empty() {
@@ -582,8 +566,6 @@ pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
 
     let idx = find_transition_for_utc(transitions, utc_unix);
 
-    // If we're past the last *stored* transition and this zone has a repeating tail,
-    // delegate to the far-future resolver (which correctly handles perpetual DST rules).
     let last_idx = transitions.len() - 1;
     let last_t_utc = transition_utc(transitions, last_idx);
     if utc_unix > last_t_utc {
@@ -601,12 +583,12 @@ pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
     })
 }
 
-/// Convenience wrapper that returns just the offset (in seconds) for a UTC instant.
-/// Most callers who only need the numeric offset will use this.
+/// Returns the offset (in seconds) for an IANA timezone at the given UTC Unix time.
 #[inline(always)]
 pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
     offset_info_at_utc(name, utc_unix).map(|info| info.offset)
 }
+
 "#,
     );
 
