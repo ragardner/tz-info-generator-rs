@@ -236,12 +236,14 @@ fn main() {
     output.push_str("#![allow(clippy::too_many_lines)]\n");
     output.push_str("#![cfg_attr(rustfmt, rustfmt::skip)]\n\n");
 
-    output.push_str(
+    output.push_str(&format!(
         "//! This module is auto-generated from the IANA Time Zone Database\n\
-        //! found at: https://www.iana.org/time-zones\n\
-        //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
-        //! mode (`tz` feature) which has full historical transitions.\n\n",
-    );
+     //! found at: https://www.iana.org/time-zones\n\
+     //! Source directory: {}\n\
+     //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
+     //! mode (`tz` feature) which has full historical transitions.\n\n",
+        dir_name
+    ));
 
     output.push_str(&format!("pub static VERSION: &str = \"{}\";\n\n", version));
 
