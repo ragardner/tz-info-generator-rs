@@ -147,27 +147,34 @@ fn main() {
 
             // === detect perpetual repeating rules ===
             let repeating_tail_start = {
-                if let Some(zoneset) = table.get_zoneset(name) {
+                // 1. Rule metadata
+                let has_perpetual_rule = if let Some(zoneset) = table.get_zoneset(name) {
                     if let Some(last_zone) = zoneset.last() {
                         if let Saving::Multiple(ref rules_name) = last_zone.saving {
                             if let Some(rules) = table.rulesets.get(rules_name) {
-                                if rules
+                                rules
                                     .iter()
                                     .any(|r| matches!(r.to_year, Some(Year::Maximum) | None))
-                                {
-                                    Some(transitions.len().saturating_sub(2))
-                                } else {
-                                    None
-                                }
                             } else {
-                                None
+                                false
                             }
                         } else {
-                            None
+                            false
                         }
                     } else {
-                        None
+                        false
                     }
+                } else {
+                    false
+                };
+
+                // 2. Reality check: repeating zones have a transition far in the future
+                let last_ts = transitions.last().map(|t| t.local_timestamp).unwrap_or(0);
+                const REPEATING_TAIL_CUTOFF: i64 = 2_208_988_800; // 2040-01-01 UTC
+                // (tzdata has projected repeating rules to 2099+ for decades)
+
+                if has_perpetual_rule && last_ts > REPEATING_TAIL_CUTOFF && transitions.len() >= 4 {
+                    Some(transitions.len().saturating_sub(2))
                 } else {
                     None
                 }
@@ -291,12 +298,12 @@ pub struct OffsetInfo {
 }
 
 /// Returns the abbreviation string for the given index into `ABBREVS`.
-#[inline(always)]
+#[inline]
 pub fn abbrev(idx: u16) -> &'static str {
     ABBREVS[idx as usize]
 }
 
-#[inline(always)]
+#[inline]
 fn last_transition(transitions: &[Transition]) -> Option<OffsetInfo> {
     transitions.last().map(|t| OffsetInfo {
         offset: t.offset,
@@ -487,7 +494,7 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
 ///
 /// For `idx == 0` this returns `i64::MIN`. For `idx >= 1` it is derived as
 /// `local_timestamp[idx] - offset[idx-1]`.
-#[inline(always)]
+#[inline]
 fn transition_utc(transitions: &[Transition], idx: usize) -> i64 {
     if idx == 0 {
         i64::MIN
@@ -497,7 +504,7 @@ fn transition_utc(transitions: &[Transition], idx: usize) -> i64 {
 }
 
 /// Binary search for the last transition whose UTC time is ≤ `utc_unix`.
-#[inline(always)]
+#[inline]
 fn find_transition_for_utc(transitions: &[Transition], utc_unix: i64) -> usize {
     let mut lo = 0usize;
     let mut hi = transitions.len();
@@ -592,7 +599,7 @@ pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
 }
 
 /// Returns the offset (in seconds) for an IANA timezone at the given UTC Unix time.
-#[inline(always)]
+#[inline]
 pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
     offset_info_at_utc(name, utc_unix).map(|info| info.offset)
 }
