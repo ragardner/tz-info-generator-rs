@@ -182,49 +182,80 @@ fn main() {
                 let last_ts = transitions.last().map(|t| t.local_timestamp).unwrap_or(0);
                 const REPEATING_TAIL_CUTOFF: i64 = 2_208_988_800; // ~2040-01-01
 
-                if !has_perpetual_rule || last_ts <= REPEATING_TAIL_CUTOFF || transitions.len() < 8
+                const VALIDATION_WINDOW: usize = 8;
+
+                if !has_perpetual_rule
+                    || last_ts <= REPEATING_TAIL_CUTOFF
+                    || transitions.len() < VALIDATION_WINDOW
                 {
                     Repeating::None
                 } else {
-                    // Take the last 8 transitions. This gives us enough data to validate
-                    // that the pattern repeats cleanly over at least *three* full intervals
-                    // (two consecutive matching periods). This is significantly more robust
-                    // against recent rule changes, noisy historical data, or one-off anomalies.
-                    let start = transitions.len().saturating_sub(8);
-                    let len = 8usize;
+                    // Use the last 8 transitions purely for validation.
+                    // We require a stable pattern across three consecutive periods.
+                    // This is intentionally conservative.
+                    let validation_start = transitions.len().saturating_sub(VALIDATION_WINDOW);
 
-                    // Compute three consecutive periods and require them all to be identical
-                    // and positive. We also apply a sanity range check (roughly 30 days to 400 days)
-                    // to reject clearly bogus periods.
-                    let p0 =
-                        transitions[start + 2].local_timestamp - transitions[start].local_timestamp;
-                    let p1 = transitions[start + 4].local_timestamp
-                        - transitions[start + 2].local_timestamp;
-                    let p2 = transitions[start + 6].local_timestamp
-                        - transitions[start + 4].local_timestamp;
+                    // Compute three consecutive periods inside the validation window.
+                    let p0 = transitions[validation_start + 2].local_timestamp
+                        - transitions[validation_start].local_timestamp;
+                    let p1 = transitions[validation_start + 4].local_timestamp
+                        - transitions[validation_start + 2].local_timestamp;
+                    let p2 = transitions[validation_start + 6].local_timestamp
+                        - transitions[validation_start + 4].local_timestamp;
 
-                    // Only accept if we have a stable, reasonable repeating period.
+                    // Only accept if the pattern is stable and the period is reasonable.
                     if p0 > 0 && p0 == p1 && p1 == p2 && p0 >= 2_592_000 && p0 <= 34_560_000 {
+                        // We have a stable period. Now compute the actual repeating
+                        // unit length by looking at the offset sequence in the
+                        // validation window. We prefer the smallest k (starting from 2)
+                        // such that the offsets repeat every k steps.
+                        let window_offsets: Vec<i32> = (0..VALIDATION_WINDOW)
+                            .map(|i| transitions[validation_start + i].offset)
+                            .collect();
+
+                        let mut cycle_len = VALIDATION_WINDOW; // safe fallback
+
+                        for candidate in 2..=VALIDATION_WINDOW {
+                            let mut repeats = true;
+
+                            for pos in 0..candidate {
+                                let first = window_offsets[pos];
+                                for j in (pos + candidate..VALIDATION_WINDOW).step_by(candidate) {
+                                    if window_offsets[j] != first {
+                                        repeats = false;
+                                        break;
+                                    }
+                                }
+                                if !repeats {
+                                    break;
+                                }
+                            }
+
+                            if repeats {
+                                cycle_len = candidate;
+                                break;
+                            }
+                        }
+
                         Repeating::Cycle {
-                            start,
-                            len,
+                            start: validation_start,
+                            len: cycle_len,
                             period: p0,
                         }
                     } else {
                         // Pattern is not cleanly repeating or period is unreasonable
-                        // → conservative fallback. This protects against recent rule
-                        // changes, irregular cycles, or zones with non-standard repeating rules.
+                        // → conservative fallback.
                         Repeating::None
                     }
                 }
             };
 
             // Optimization for binary size + cleanliness:
-            // If we detected a stable repeating cycle, we only keep historical
-            // transitions + ONE copy of the cycle in the DATA_N array.
-            // The Repeating::Cycle { start, len, period } tells the runtime where
-            // the repeating part begins and how to use it. This avoids storing
-            // hundreds of near-duplicate transitions for zones with long histories.
+            // If we detected a stable repeating cycle, we keep historical transitions
+            // + ONE copy of the actual repeating unit (whose length we compute from
+            // the validated window). `len` now reflects the real cycle size rather
+            // than the validation window. This keeps DATA_N small while preserving
+            // full fidelity.
             let transitions = if let Repeating::Cycle { start, len, .. } = repeating {
                 let keep_up_to = start + len;
                 if keep_up_to < transitions.len() {
