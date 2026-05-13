@@ -336,7 +336,8 @@ fn main() {
      //! found at: https://www.iana.org/time-zones\n\
      //! Source directory: {}\n\
      //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
-     //! mode (`tz` feature) which has full historical transitions.\n\n",
+     //! mode (`tz` feature) which has full historical transitions.\n
+     //! Generator source: https://github.com/ragardner/tz-info-generator-rs\n\n",
         dir_name
     ));
 
@@ -492,7 +493,7 @@ fn resolve_far_future_local(
         let off_diff = (nxt.offset - prev.offset) as i64;
         if off_diff != 0 {
             let window_start = prev.local_timestamp;
-            let window_size = off_diff.abs();
+            let window_size = off_diff.saturating_abs();
             let window_end = window_start + window_size;
             let query_local = first.local_timestamp + position_in_cycle;
             if query_local >= window_start && query_local < window_end {
@@ -570,7 +571,7 @@ pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
         let off_diff = (nxt.offset - prev.offset) as i64;
         if off_diff != 0 {
             let window_start = prev.local_timestamp;
-            let window_size = off_diff.abs();
+            let window_size = off_diff.saturating_abs();
             let window_end = window_start + window_size;
             if local_unix >= window_start && local_unix < window_end {
                 if off_diff > 0 {
