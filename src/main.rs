@@ -408,7 +408,7 @@ pub struct OffsetInfo {
 
 /// Returns the abbreviation string for the given index into `ABBREVS`.
 #[inline]
-pub(crate) fn abbrev(idx: u16) -> &'static str {
+pub fn abbrev(idx: u16) -> &'static str {
     ABBREVS[idx as usize]
 }
 
