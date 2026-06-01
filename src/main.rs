@@ -408,7 +408,7 @@ pub struct OffsetInfo {
 
 /// Returns the abbreviation string for the given index into `ABBREVS`.
 #[inline]
-pub fn abbrev(idx: u16) -> &'static str {
+pub(crate) fn abbrev(idx: u16) -> &'static str {
     ABBREVS[idx as usize]
 }
 
@@ -530,7 +530,7 @@ fn resolve_far_future_local(
 /// If the local time falls in a gap (spring-forward), `is_gap` is `true` and
 /// `gap_size` contains the number of skipped seconds. Add `gap_size` to the
 /// original local time and re-query to obtain a valid instant.
-pub fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
+pub(crate) fn offset_info_at_local(name: &str, local_unix: i64) -> Option<OffsetInfo> {
     let (_, transitions, repeating) = get_tz_data(name)?;
     let idx = transitions.partition_point(|t| t.local_timestamp <= local_unix);
     if idx == 0 {
@@ -684,7 +684,7 @@ fn resolve_far_future_utc(
 ///
 /// `is_gap` is always `false` because gaps are a local-time concept only.
 /// Every UTC instant has exactly one well-defined offset.
-pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
+pub(crate) fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
     let (_, transitions, repeating) = get_tz_data(name)?;
     if transitions.is_empty() {
         return None;
@@ -705,12 +705,6 @@ pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
         is_gap: false,
         gap_size: 0,
     })
-}
-
-/// Returns the offset (in seconds) for an IANA timezone at the given UTC Unix time.
-#[inline]
-pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
-    offset_info_at_utc(name, utc_unix).map(|info| info.offset)
 }
 
 "#,
@@ -754,7 +748,7 @@ pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
     // === TZ_ENTRIES (single name, conditionally compiled) ===
     // Full version
     output.push_str("#[cfg(feature = \"tz\")]\n");
-    output.push_str("pub(crate) static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
+    output.push_str("pub static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
     for (name, data_name, repeating) in &entries {
         let repeating_str = match repeating {
             Repeating::None => "Repeating::None".to_string(),
@@ -772,7 +766,7 @@ pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
 
     // Minimal version (reuses DATA_0 so everything stays DATA_N / TZ_ENTRIES)
     output.push_str("#[cfg(not(feature = \"tz\"))]\n");
-    output.push_str("pub(crate) static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
+    output.push_str("pub static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
     for (name, _data_name, repeating) in &minimal_entries {
         let repeating_str = match repeating {
             Repeating::None => "Repeating::None".to_string(),
