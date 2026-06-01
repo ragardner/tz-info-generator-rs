@@ -333,11 +333,11 @@ fn main() {
 
     output.push_str(&format!(
         "//! This module is auto-generated from the IANA Time Zone Database\n\
-     //! found at: https://www.iana.org/time-zones\n\
-     //! Source directory: {}\n\
-     //! It provides both a minimal mode (UTC + identical zones only) and a full\n\
-     //! mode (`tz` feature) which has full historical transitions.\n
-     //! Generator source: https://github.com/ragardner/tz-info-generator-rs\n\n",
+//! found at: https://www.iana.org/time-zones\n\
+//! Source directory: {}\n\
+//! It provides both a minimal mode (UTC + identical zones only) and a full\n\
+//! mode (`tz` feature) which has full historical transitions.\n\
+//! Generator source: https://github.com/ragardner/tz-info-generator-rs\n\n",
         dir_name
     ));
 
@@ -345,7 +345,7 @@ fn main() {
 
     // ABBREVS table (always included - very small)
     output.push_str(&format!(
-        "pub static ABBREVS: [&'static str; {}] = [\n",
+        "pub static ABBREVS: [&str; {}] = [\n",
         abbrevs.len()
     ));
     for abbr in &abbrevs {
@@ -694,10 +694,8 @@ pub fn offset_info_at_utc(name: &str, utc_unix: i64) -> Option<OffsetInfo> {
 
     let last_idx = transitions.len() - 1;
     let last_t_utc = transition_utc(transitions, last_idx);
-    if utc_unix > last_t_utc {
-        if let Repeating::Cycle { .. } = repeating {
-            return resolve_far_future_utc(transitions, repeating, utc_unix);
-        }
+    if utc_unix > last_t_utc && let Repeating::Cycle { .. } = repeating {
+        return resolve_far_future_utc(transitions, repeating, utc_unix);
     }
 
     let t = &transitions[idx];
@@ -756,9 +754,7 @@ pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
     // === TZ_ENTRIES (single name, conditionally compiled) ===
     // Full version
     output.push_str("#[cfg(feature = \"tz\")]\n");
-    output.push_str(
-        "pub(crate) static TZ_ENTRIES: &[(&str, &'static [Transition], Repeating)] = &[\n",
-    );
+    output.push_str("pub(crate) static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
     for (name, data_name, repeating) in &entries {
         let repeating_str = match repeating {
             Repeating::None => "Repeating::None".to_string(),
@@ -776,9 +772,7 @@ pub fn offset_at_utc(name: &str, utc_unix: i64) -> Option<i32> {
 
     // Minimal version (reuses DATA_0 so everything stays DATA_N / TZ_ENTRIES)
     output.push_str("#[cfg(not(feature = \"tz\"))]\n");
-    output.push_str(
-        "pub(crate) static TZ_ENTRIES: &[(&str, &'static [Transition], Repeating)] = &[\n",
-    );
+    output.push_str("pub(crate) static TZ_ENTRIES: &[(&str, &[Transition], Repeating)] = &[\n");
     for (name, _data_name, repeating) in &minimal_entries {
         let repeating_str = match repeating {
             Repeating::None => "Repeating::None".to_string(),
