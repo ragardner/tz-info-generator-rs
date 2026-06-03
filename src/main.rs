@@ -109,7 +109,8 @@ fn main() {
             }
         }
     }
-    let abbrevs: Vec<String> = abbrev_set.into_iter().collect();
+    let mut abbrevs: Vec<String> = abbrev_set.into_iter().collect();
+    abbrevs.sort();
     let abbrev_to_idx: HashMap<String, u16> = abbrevs
         .iter()
         .enumerate()
@@ -410,6 +411,16 @@ pub struct OffsetInfo {
 #[inline]
 pub fn abbrev(idx: u16) -> &'static str {
     ABBREVS[idx as usize]
+}
+
+/// Returns the static abbreviation if the given string exists in `ABBREVS`.
+/// Uses binary search (the table is kept sorted at code-generation time).
+#[inline]
+pub fn abbrev_from_str(abbrev: &str) -> Option<&'static str> {
+    match ABBREVS.binary_search(&abbrev) {
+        Ok(i) => Some(ABBREVS[i]),
+        Err(_) => None,
+    }
 }
 
 #[inline]
